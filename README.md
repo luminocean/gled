@@ -1,2 +1,2 @@
-# Golang implemented Lightweight Embedded Database
+# Lightweight Embedded Database in Golang
 

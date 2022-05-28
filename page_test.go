@@ -9,7 +9,7 @@ import (
 
 func TestFlushAndLoad(t *testing.T) {
 	items := []string{
-		"this is some data",
+		"here's some data",
 		"have a nice day",
 		"good bye",
 	}
