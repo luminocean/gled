@@ -1,10 +1,13 @@
 package gled
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"unsafe"
 )
 
@@ -13,22 +16,100 @@ import (
 const (
 	// size of one page
 	pageSize = 1024 * 8
-	// size of uint32
-	pagePointerSize = 4
 )
 
 var (
-	// pageHeaderSize is the size of a page header
-	pageHeaderSize = uint32(unsafe.Sizeof(PageHeader{}))
 	// endian for all data bytes in a page
 	endian = binary.BigEndian
+	// size of a page header
+	pageHeaderSize = uint32(unsafe.Sizeof(PageHeader{}))
+	// size of a page pointer
+	pagePointerSize = uint32(unsafe.Sizeof(PagePointer(0)))
+	// size of a tuple pointer
+	tuplePointerSize = uint32(unsafe.Sizeof(TuplePointer{}))
 )
+
+// PagePointer is a pointer pointing to a location within a page
+type PagePointer uint32
 
 type PageHeader struct {
 	// Lower is the starting position of the free space (inclusive)
-	lower uint32
+	lower PagePointer
 	// Lower is the ending position of the free space (exclusive)
-	upper uint32
+	upper PagePointer
+}
+
+func (p *PageHeader) toBytes() (data []byte) {
+	buffer := bytes.Buffer{}
+	w := bufio.NewWriter(&buffer)
+	_, err := w.Write(uint32ToBytes(uint32(p.lower)))
+	if err != nil {
+		panic(err) // in-memory write, should not fail
+	}
+	_, err = w.Write(uint32ToBytes(uint32(p.upper)))
+	if err != nil {
+		panic(err)
+	}
+	err = w.Flush()
+	if err != nil {
+		panic(err)
+	}
+	return buffer.Bytes()
+}
+
+// postgres equivalent:
+// https://github.com/postgres/postgres/blob/27b77ecf9f4d5be211900eda54d8155ada50d696/src/include/storage/itemid.h#L38
+type tupleAttributes struct {
+	// whether the pointer is in use
+	used bool
+}
+
+// TuplePointer points to a tuple within a page
+type TuplePointer struct {
+	attrs   tupleAttributes
+	dataPtr PagePointer
+}
+
+func NewTuplePointerFromBytes(data []byte) (pointer TuplePointer, err error) {
+	if uint32(len(data)) != tuplePointerSize {
+		err = fmt.Errorf("invalid number of bytes to create a tuple pointer")
+		return
+	}
+	used := data[0]
+	if used == 0 {
+		pointer.attrs.used = false
+	} else if used == 1 {
+		pointer.attrs.used = true
+	} else {
+		err = fmt.Errorf("invalid pointer used attr: %d", used)
+		return
+	}
+	pointer.dataPtr = PagePointer(bytesToUint32(data[1:]))
+	return
+}
+
+func (p *TuplePointer) toBytes() (data []byte) {
+	buffer := bytes.Buffer{}
+	w := bufio.NewWriter(&buffer)
+	var err error
+	if p.attrs.used {
+		_, err = w.Write([]byte{1})
+	} else {
+		_, err = w.Write([]byte{0})
+	}
+	if err != nil {
+		panic(err) // in-memory write, should not fail
+	}
+	_, err = w.Write(uint32ToBytes(uint32(p.dataPtr)))
+	if err != nil {
+		panic(err)
+	}
+	err = w.Flush()
+	if err != nil {
+		panic(err)
+	}
+	data = buffer.Bytes()
+	return
 }
 
 type Tuple []byte
@@ -37,163 +118,246 @@ func (t *Tuple) Size() uint32 {
 	return uint32(len(*t))
 }
 
-type PagePointer uint32
-
 type Page struct {
-	header   PageHeader
-	pointers []PagePointer
-	tuples   []Tuple
+	file   *os.File
+	header PageHeader
 }
 
 // NewPage creates and initializes a new page
-func NewPage() *Page {
+func NewPage(file *os.File) *Page {
 	return &Page{
 		header: PageHeader{
-			lower: pageHeaderSize,
+			lower: PagePointer(pageHeaderSize),
 			upper: pageSize,
 		},
+		file: file,
 	}
+}
+
+func (p *Page) Init() (err error) {
+	err = p.readHeader()
+	if err != nil {
+		return
+	}
+	return
 }
 
 // Add adds a tuple to the page
 func (p *Page) Add(tuple Tuple) (err error) {
-	if p.header.lower+pagePointerSize+tuple.Size() >= p.header.upper {
+	if !p.Initialized() {
+		err = errors.New("page not initialized")
+		return
+	}
+	if uint32(p.header.lower)+tuplePointerSize+tuple.Size() >= uint32(p.header.upper) {
 		err = errors.New("no room for more tuples")
 		return
 	}
-	// add the tuple
-	p.tuples = append(p.tuples, tuple)
-	p.header.upper -= tuple.Size()
 
-	// add a pointer for the new tuple
-	p.pointers = append(p.pointers, PagePointer(p.header.upper))
-	p.header.lower += pagePointerSize
+	// write the tuple
+	tupleStart := uint32(p.header.upper) - tuple.Size()
+	err = p.writeAt(tuple, tupleStart)
+	if err != nil {
+		return
+	}
+	// update upper
+	p.header.upper = PagePointer(uint32(p.header.upper) - tuple.Size())
+
+	// write the pointer for the tuple
+	pointerStart := uint32(p.header.lower)
+	pointer := TuplePointer{
+		attrs: tupleAttributes{
+			used: true,
+		},
+		dataPtr: PagePointer(tupleStart),
+	}
+	err = p.writeAt(pointer.toBytes(), pointerStart)
+	if err != nil {
+		return
+	}
+	// update lower
+	p.header.lower = PagePointer(uint32(p.header.lower) + tuplePointerSize)
+
+	// write updated lower and upper pointers
+	err = p.writeAt(p.header.toBytes(), 0)
+	if err != nil {
+		return
+	}
+
+	// flush
+	err = p.file.Sync()
+	if err != nil {
+		return
+	}
 	return
 }
 
-// All lists all the tuples in the page
-func (p *Page) All() (tuples []Tuple) {
-	return p.tuples
+// Remove removes a tuple by providing the pointer index (starting from 0) pointing to the tuple
+func (p *Page) Remove(tpIdx uint32) (err error) {
+	pointerCount, err := p.countTuplePointers()
+	if err != nil {
+		err = fmt.Errorf("failed to count tuple pointers: %w", err)
+		return
+	}
+	if tpIdx >= pointerCount {
+		err = fmt.Errorf("tuple pointer index too large")
+		return
+	}
+	// read the pointer from the file
+	tpStart := pageHeaderSize + tuplePointerSize*tpIdx
+	buffer := make([]byte, tuplePointerSize)
+	err = p.readAt(buffer, tpStart)
+	if err != nil {
+		return
+	}
+	pointer, err := NewTuplePointerFromBytes(buffer)
+	if err != nil {
+		return
+	}
+	// reset the pointer so that the pointed tuple will be considered "deleted"
+	pointer.attrs.used = false
+	// write back
+	err = p.writeAt(pointer.toBytes(), tpStart)
+	if err != nil {
+		err = fmt.Errorf("failed to write tuple pointer back to the file: %w", err)
+		return
+	}
+	// flush
+	err = p.file.Sync()
+	if err != nil {
+		return
+	}
+	return
 }
 
-// Flush writes data on the page to the page file
-func (p *Page) Flush(out DataWritable) (err error) {
-	// ensure we start from the beginning
-	_, err = out.Seek(0, io.SeekStart)
+// ReadAll reads all tuples from a page
+func (p *Page) ReadAll() (tuples []Tuple, tpIdxes []uint32, err error) {
+	if !p.Initialized() {
+		err = errors.New("page not initialized")
+		return
+	}
+	err = p.readHeader()
 	if err != nil {
 		return
 	}
 
-	// write header
-	buffer := make([]byte, pageHeaderSize)
-	endian.PutUint32(buffer[0:4], p.header.lower)
-	endian.PutUint32(buffer[4:8], p.header.upper)
-	_, err = out.Write(buffer)
+	// read tuple pointers
+	pointerCount, err := p.countTuplePointers()
 	if err != nil {
+		err = fmt.Errorf("failed to count tuple pointers: %w", err)
+		return
+	}
+	buffer := make([]byte, tuplePointerSize*pointerCount)
+	err = p.readAt(buffer, pageHeaderSize)
+	if err != nil {
+		err = fmt.Errorf("faild to read tuple pointers: %w", err)
 		return
 	}
 
-	// write pointers
-	buffer = make([]byte, len(p.pointers)*pagePointerSize)
-	for idx, pointer := range p.pointers {
-		endian.PutUint32(buffer[idx*pagePointerSize:(idx+1)*pagePointerSize], uint32(pointer))
-	}
-	_, err = out.Write(buffer)
-	if err != nil {
-		return
-	}
-
-	// write tuples
-	_, err = out.Seek(int64(p.header.upper), io.SeekStart)
-	if err != nil {
-		return
-	}
-	// reversed order
-	for i := len(p.tuples) - 1; i >= 0; i-- {
-		tuple := p.tuples[i]
-		_, err = out.Write(tuple)
+	// we got the pointers
+	pointers := make([]TuplePointer, pointerCount)
+	var i uint32
+	for i = 0; i < pointerCount; i++ {
+		pointers[i], err = NewTuplePointerFromBytes(buffer[i*tuplePointerSize : (i+1)*tuplePointerSize])
 		if err != nil {
 			return
 		}
 	}
-	return
-}
-
-func (p *Page) Load(in DataReadable) (err error) { // ensure we start from the beginning
-	_, err = in.Seek(0, io.SeekStart)
-	if err != nil {
-		err = fmt.Errorf("failed to seek the page file: %w", err)
-		return
-	}
-	// read page header
-	buffer := make([]byte, pageHeaderSize)
-	read, err := in.Read(buffer)
-	if err != nil {
-		if err == io.EOF {
-			// if |in| is an empty, we shall stop and treat it as a regular yet empty source
-			// and nothing else needs to be done
-			err = nil
-			return
-		}
-		err = fmt.Errorf("failed to read page header: %w", err)
-		return
-	} else if uint32(read) != pageHeaderSize {
-		err = fmt.Errorf("mismatched bytes read for page header")
-		return
-	}
-	p.header.lower = endian.Uint32(buffer[:4])
-	p.header.upper = endian.Uint32(buffer[4:8])
-
-	// read pointers
-	pointerSectionSize := p.header.lower - pageHeaderSize
-	if pointerSectionSize%pagePointerSize != 0 {
-		err = fmt.Errorf("invalid pointer section size: %d", pointerSectionSize)
-		return
-	}
-	pointerCount := pointerSectionSize / pagePointerSize
-	buffer = make([]byte, pagePointerSize*pointerCount)
-	read, err = in.Read(buffer)
-	if err != nil {
-		err = fmt.Errorf("failed to read page pointers: %w", err)
-		return
-	} else if uint32(read) != pagePointerSize*pointerCount {
-		err = fmt.Errorf("mismatched bytes read for page pointers")
-		return
-	}
-	p.pointers = make([]PagePointer, pointerCount)
-	var i uint32
-	for i = 0; i < pointerCount; i++ {
-		p.pointers[i] = PagePointer(endian.Uint32(buffer[pagePointerSize*i : pagePointerSize*(i+1)]))
-	}
 
 	// read tuples
-	tupleCount := pointerCount
-	p.tuples = make([]Tuple, tupleCount)
-	for idx, pointer := range p.pointers {
+	for idx, pointer := range pointers {
+		// not used, skip
+		if !pointer.attrs.used {
+			continue
+		}
 		var tupleSize uint32
 		// decide the tuple size
 		if idx == 0 {
 			// the first tuple (at the end of the file)
-			tupleSize = uint32(pageSize - p.pointers[idx])
+			tupleSize = uint32(pageSize - pointers[idx].dataPtr)
 		} else {
-			tupleSize = uint32(p.pointers[idx-1] - p.pointers[idx])
+			tupleSize = uint32(pointers[idx-1].dataPtr - pointers[idx].dataPtr)
 		}
 		buffer = make([]byte, tupleSize)
-		// read the content
-		_, err = in.Seek(int64(pointer), io.SeekStart)
+		err = p.readAt(buffer, uint32(pointer.dataPtr))
 		if err != nil {
-			err = fmt.Errorf("failed to seek the page file: %w", err)
+			err = fmt.Errorf("failed tp read tuple data: %w", err)
 			return
 		}
-		read, err = in.Read(buffer)
-		if err != nil {
-			err = fmt.Errorf("failed to read page tuples: %w", err)
-			return
-		} else if uint32(read) != tupleSize {
-			err = fmt.Errorf("mismatched bytes read for page tuples")
-			return
-		}
-		p.tuples[idx] = buffer
+		tuples = append(tuples, buffer)
+		tpIdxes = append(tpIdxes, uint32(idx))
 	}
 	return
+}
+
+func (p *Page) Initialized() bool {
+	// an initialized page will never have a zero lower or upper pointer
+	return p.header != (PageHeader{})
+}
+
+func (p *Page) countTuplePointers() (count uint32, err error) {
+	pointerSectionSize := uint32(p.header.lower) - pageHeaderSize
+	if pointerSectionSize%tuplePointerSize != 0 {
+		err = fmt.Errorf("invalid pointer section size: %d", pointerSectionSize)
+		return
+	}
+	count = pointerSectionSize / tuplePointerSize
+	return
+}
+
+func (p *Page) readHeader() (err error) {
+	buffer := make([]byte, pageHeaderSize)
+	err = p.readAt(buffer, 0)
+	if err != nil {
+		if err == io.EOF {
+			// we are dealing with an empty file
+			return nil
+		}
+		return fmt.Errorf("failed to read page header: %w", err)
+	}
+	p.header.lower = PagePointer(endian.Uint32(buffer[pagePointerSize*0 : pagePointerSize*1]))
+	p.header.upper = PagePointer(endian.Uint32(buffer[pagePointerSize*1 : pagePointerSize*2]))
+	return
+}
+
+func (p *Page) writeAt(data []byte, position uint32) (err error) {
+	written, err := p.file.WriteAt(data, int64(position))
+	if err != nil {
+		return
+	} else if written != len(data) {
+		err = errors.New("wrong number of bytes written into the page file")
+		return
+	}
+	return
+}
+
+func (p *Page) readAt(data []byte, position uint32) (err error) {
+	// read the content
+	_, err = p.file.Seek(int64(position), io.SeekStart)
+	if err != nil {
+		err = fmt.Errorf("failed to seek the page file: %w", err)
+		return
+	}
+	read, err := p.file.Read(data)
+	if err != nil {
+		// for EOF, return as is since it might be normal sometimes
+		if err == io.EOF {
+			return err
+		}
+		err = fmt.Errorf("failed to read data from file: %w", err)
+		return
+	} else if read != len(data) {
+		err = fmt.Errorf("mismatched number of bytes read")
+		return
+	}
+	return
+}
+
+func uint32ToBytes(value uint32) []byte {
+	buffer := make([]byte, unsafe.Sizeof(value))
+	endian.PutUint32(buffer, value)
+	return buffer
+}
+
+func bytesToUint32(data []byte) uint32 {
+	return endian.Uint32(data)
 }
