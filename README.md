@@ -26,7 +26,7 @@ Now you can go head and insert data:
 
 ```go
 ins.Insert(Book{
-	  Name: "mybook",
+    Name: "mybook",
 })
 ```
 
@@ -34,8 +34,8 @@ Gled accepts a callback function to run select queries which is way more powerfu
 
 ```go
 books, _ := ins.Select(func(b Book) bool {
-		// select books whose name starts with "my"
-		return strings.HasPrefix(b.Name, "my")
+    // select books whose name starts with "my"
+    return strings.HasPrefix(b.Name, "my")
 })
 ```
 
@@ -43,8 +43,8 @@ Of course you can delete data using the same approach:
 
 ```go
 ins.Delete(func(b Book) bool {
-		// delete all
-		return true
+    // delete all
+    return true
 })
 ```
 
@@ -106,6 +106,7 @@ func main() {
 ## Roadmap
 
 - Multi-page support for Gled tables (currently only one page per table)
-- Multi-database support
+- Multi-table/multi-database support
+- SQL interface
 - DB Vacuum
 - Indexing
