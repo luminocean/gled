@@ -130,7 +130,7 @@ type Page struct {
 }
 
 // NewPage creates and initializes a new page
-// from a specific offset of a file
+// from a specific offset of a data
 func NewPage(data *os.File, offset uint64) *Page {
 	return &Page{
 		header: PageHeader{
