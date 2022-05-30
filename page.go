@@ -32,10 +32,13 @@ var (
 // PagePointer is a pointer pointing to a location within a page
 type PagePointer uint32
 
+// PageHeader is the head of a page
 type PageHeader struct {
 	// Lower is the starting position of the free space (inclusive)
+	// relative to the containing page offset
 	lower PagePointer
 	// Lower is the ending position of the free space (exclusive)
+	// relative to the containing page offset
 	upper PagePointer
 }
 
@@ -112,25 +115,30 @@ func (p *TuplePointer) toBytes() (data []byte) {
 	return
 }
 
+// Tuple is a data tuple
 type Tuple []byte
 
 func (t *Tuple) Size() uint32 {
 	return uint32(len(*t))
 }
 
+// Page is a fixed-length area on a data to store tuples and related data structures
 type Page struct {
-	file   *os.File
 	header PageHeader
+	data   *os.File
+	offset uint64
 }
 
 // NewPage creates and initializes a new page
-func NewPage(file *os.File) *Page {
+// from a specific offset of a file
+func NewPage(data *os.File, offset uint64) *Page {
 	return &Page{
 		header: PageHeader{
 			lower: PagePointer(pageHeaderSize),
 			upper: pageSize,
 		},
-		file: file,
+		data:   data,
+		offset: offset,
 	}
 }
 
@@ -184,7 +192,7 @@ func (p *Page) Add(tuple Tuple) (err error) {
 	}
 
 	// flush
-	err = p.file.Sync()
+	err = p.data.Sync()
 	if err != nil {
 		return
 	}
@@ -202,7 +210,7 @@ func (p *Page) Remove(tpIdx uint32) (err error) {
 		err = fmt.Errorf("tuple pointer index too large")
 		return
 	}
-	// read the pointer from the file
+	// read the pointer from the data
 	tpStart := pageHeaderSize + tuplePointerSize*tpIdx
 	buffer := make([]byte, tuplePointerSize)
 	err = p.readAt(buffer, tpStart)
@@ -218,11 +226,11 @@ func (p *Page) Remove(tpIdx uint32) (err error) {
 	// write back
 	err = p.writeAt(pointer.toBytes(), tpStart)
 	if err != nil {
-		err = fmt.Errorf("failed to write tuple pointer back to the file: %w", err)
+		err = fmt.Errorf("failed to write tuple pointer back to the data: %w", err)
 		return
 	}
 	// flush
-	err = p.file.Sync()
+	err = p.data.Sync()
 	if err != nil {
 		return
 	}
@@ -272,7 +280,7 @@ func (p *Page) ReadAll() (tuples []Tuple, tpIdxes []uint32, err error) {
 		var tupleSize uint32
 		// decide the tuple size
 		if idx == 0 {
-			// the first tuple (at the end of the file)
+			// the first tuple (at the end of the data)
 			tupleSize = uint32(pageSize - pointers[idx].dataPtr)
 		} else {
 			tupleSize = uint32(pointers[idx-1].dataPtr - pointers[idx].dataPtr)
@@ -309,7 +317,7 @@ func (p *Page) readHeader() (err error) {
 	err = p.readAt(buffer, 0)
 	if err != nil {
 		if err == io.EOF {
-			// we are dealing with an empty file
+			// we are dealing with an empty data
 			return nil
 		}
 		return fmt.Errorf("failed to read page header: %w", err)
@@ -320,11 +328,11 @@ func (p *Page) readHeader() (err error) {
 }
 
 func (p *Page) writeAt(data []byte, position uint32) (err error) {
-	written, err := p.file.WriteAt(data, int64(position))
+	written, err := p.data.WriteAt(data, int64(p.offset+uint64(position)))
 	if err != nil {
 		return
 	} else if written != len(data) {
-		err = errors.New("wrong number of bytes written into the page file")
+		err = errors.New("wrong number of bytes written into the page data")
 		return
 	}
 	return
@@ -332,18 +340,18 @@ func (p *Page) writeAt(data []byte, position uint32) (err error) {
 
 func (p *Page) readAt(data []byte, position uint32) (err error) {
 	// read the content
-	_, err = p.file.Seek(int64(position), io.SeekStart)
+	_, err = p.data.Seek(int64(p.offset+uint64(position)), io.SeekStart)
 	if err != nil {
-		err = fmt.Errorf("failed to seek the page file: %w", err)
+		err = fmt.Errorf("failed to seek the page data: %w", err)
 		return
 	}
-	read, err := p.file.Read(data)
+	read, err := p.data.Read(data)
 	if err != nil {
 		// for EOF, return as is since it might be normal sometimes
 		if err == io.EOF {
 			return err
 		}
-		err = fmt.Errorf("failed to read data from file: %w", err)
+		err = fmt.Errorf("failed to read data from data: %w", err)
 		return
 	} else if read != len(data) {
 		err = fmt.Errorf("mismatched number of bytes read")

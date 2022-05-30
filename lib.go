@@ -12,7 +12,7 @@ type Instance[T any] struct {
 
 func NewInstance[T any](dataFile *os.File) *Instance[T] {
 	return &Instance[T]{
-		page: NewPage(dataFile),
+		page: NewPage(dataFile, 0),
 	}
 }
 

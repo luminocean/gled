@@ -19,14 +19,14 @@ func TestFlushAndLoad(t *testing.T) {
 	defer os.Remove(file.Name())
 	defer file.Close()
 
-	page1 := NewPage(file)
+	page1 := NewPage(file, 0)
 	for _, item := range inputTuples {
 		err := page1.Add(item)
 		assert.NoError(t, err)
 	}
 
-	page2 := NewPage(file)
-	outputTuples, err := page2.ReadAll()
+	page2 := NewPage(file, 0)
+	outputTuples, _, err := page2.ReadAll()
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, inputTuples, outputTuples)
