@@ -1,6 +1,6 @@
-# GLED: Lightweight Embedded Database in Golang
+# GLED
 
-Gled is an embedded relational database implemented in pure Go, inspired by SQLite and PostgreSQL.
+Lightweight Embedded Database in Golang, inspired by SQLite and PostgreSQL.
 
 ## Usage
 

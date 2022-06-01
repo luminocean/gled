@@ -124,21 +124,20 @@ func (t *Tuple) Size() uint32 {
 
 // Page is a fixed-length area on a data to store tuples and related data structures
 type Page struct {
-	header PageHeader
-	data   *os.File
-	offset uint64
+	header      PageHeader
+	data        *os.File
+	offset      uint64
+	initialized bool
 }
 
 // NewPage creates and initializes a new page
 // from a specific offset of a data
 func NewPage(data *os.File, offset uint64) *Page {
 	return &Page{
-		header: PageHeader{
-			lower: PagePointer(pageHeaderSize),
-			upper: pageSize,
-		},
-		data:   data,
-		offset: offset,
+		header:      PageHeader{},
+		data:        data,
+		offset:      offset,
+		initialized: false,
 	}
 }
 
@@ -147,14 +146,18 @@ func (p *Page) Init() (err error) {
 	if err != nil {
 		return
 	}
+	p.initialized = true
 	return
 }
 
 // Add adds a tuple to the page
-func (p *Page) Add(tuple Tuple) (err error) {
-	if !p.Initialized() {
-		err = errors.New("page not initialized")
-		return
+// returns the remaining free spaces for more tuples
+func (p *Page) Add(tuple Tuple) (free uint32, err error) {
+	if !p.initialized {
+		err = p.Init()
+		if err != nil {
+			return
+		}
 	}
 	if uint32(p.header.lower)+tuplePointerSize+tuple.Size() >= uint32(p.header.upper) {
 		err = errors.New("no room for more tuples")
@@ -196,6 +199,9 @@ func (p *Page) Add(tuple Tuple) (err error) {
 	if err != nil {
 		return
 	}
+
+	// the remaining hole size - one pointer
+	free = uint32(p.header.upper) - uint32(p.header.lower) - pagePointerSize
 	return
 }
 
@@ -238,10 +244,12 @@ func (p *Page) Remove(tpIdx uint32) (err error) {
 }
 
 // ReadAll reads all tuples from a page
-func (p *Page) ReadAll() (tuples []Tuple, tpIdxes []uint32, err error) {
-	if !p.Initialized() {
-		err = errors.New("page not initialized")
-		return
+func (p *Page) ReadAll() (tuples []Tuple, err error) {
+	if !p.initialized {
+		err = p.Init()
+		if err != nil {
+			return
+		}
 	}
 	err = p.readHeader()
 	if err != nil {
@@ -292,14 +300,8 @@ func (p *Page) ReadAll() (tuples []Tuple, tpIdxes []uint32, err error) {
 			return
 		}
 		tuples = append(tuples, buffer)
-		tpIdxes = append(tpIdxes, uint32(idx))
 	}
 	return
-}
-
-func (p *Page) Initialized() bool {
-	// an initialized page will never have a zero lower or upper pointer
-	return p.header != (PageHeader{})
 }
 
 func (p *Page) countTuplePointers() (count uint32, err error) {
@@ -317,8 +319,13 @@ func (p *Page) readHeader() (err error) {
 	err = p.readAt(buffer, 0)
 	if err != nil {
 		if err == io.EOF {
-			// we are dealing with an empty data
-			return nil
+			// nothing to read, using default config
+			p.header = PageHeader{
+				lower: PagePointer(pageHeaderSize),
+				upper: pageSize,
+			}
+			err = nil
+			return
 		}
 		return fmt.Errorf("failed to read page header: %w", err)
 	}

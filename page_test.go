@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestFlushAndLoad(t *testing.T) {
+func TestPageWriteAndRead(t *testing.T) {
 	inputTuples := []Tuple{
 		Tuple("here's some data"),
 		Tuple("have a nice day"),
@@ -21,13 +21,16 @@ func TestFlushAndLoad(t *testing.T) {
 
 	page1 := NewPage(file, 0)
 	for _, item := range inputTuples {
-		err := page1.Add(item)
+		_, err := page1.Add(item)
 		assert.NoError(t, err)
 	}
 
-	page2 := NewPage(file, 0)
-	outputTuples, _, err := page2.ReadAll()
+	err = page1.Remove(1)
 	assert.NoError(t, err)
 
-	assert.EqualValues(t, inputTuples, outputTuples)
+	page2 := NewPage(file, 0)
+	outputTuples, err := page2.ReadAll()
+	assert.NoError(t, err)
+
+	assert.EqualValues(t, []Tuple{inputTuples[0], inputTuples[2]}, outputTuples)
 }
