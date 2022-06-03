@@ -194,14 +194,30 @@ func (p *Page) Add(tuple Tuple) (free uint32, err error) {
 		return
 	}
 
-	// flush
+	// the remaining hole size - one pointer
+	free = uint32(p.header.upper) - uint32(p.header.lower) - pagePointerSize
+	return
+}
+
+func (p *Page) Flush() (err error) {
 	err = p.data.Sync()
 	if err != nil {
 		return
 	}
+	return
+}
 
-	// the remaining hole size - one pointer
-	free = uint32(p.header.upper) - uint32(p.header.lower) - pagePointerSize
+func (p *Page) Close() (err error) {
+	if !p.initialized {
+		err = errors.New("page already closed")
+		return
+	}
+	err = p.Flush()
+	if err != nil {
+		return
+	}
+	// if there's an error during Flush, the page is not considered as closed
+	p.initialized = false
 	return
 }
 
@@ -233,11 +249,6 @@ func (p *Page) Remove(tpIdx uint32) (err error) {
 	err = p.writeAt(pointer.toBytes(), tpStart)
 	if err != nil {
 		err = fmt.Errorf("failed to write tuple pointer back to the data: %w", err)
-		return
-	}
-	// flush
-	err = p.data.Sync()
-	if err != nil {
 		return
 	}
 	return

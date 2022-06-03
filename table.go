@@ -12,6 +12,7 @@ const (
 	fsmDensity = pageSize / 256
 )
 
+// TableIterator is a callback for each tuple in a table
 type TableIterator func(tuple Tuple, page int64, offset int64) (cont bool, err error)
 
 // Table is a data structure to store data with the same schema
@@ -92,6 +93,28 @@ func (t *Table) Scan(iter TableIterator) (err error) {
 	return
 }
 
+func (t *Table) Flush() (err error) {
+	err = t.data.Sync()
+	if err != nil {
+		err = fmt.Errorf("failed to flush table data file: %w", err)
+		return
+	}
+	err = t.fsm.Sync()
+	if err != nil {
+		err = fmt.Errorf("failed to flush table fsm file: %w", err)
+		return
+	}
+	return
+}
+
+func (t *Table) Close() (err error) {
+	err = t.Flush()
+	if err != nil {
+		return
+	}
+	return
+}
+
 // find the page index that can hold a tuple with size |minSize|
 func (t *Table) getFreePageIndex(minSize uint32) (idx int64, err error) {
 	chunkSize := 1024
@@ -149,21 +172,14 @@ func (t *Table) allocateNewPage() (idx int64, err error) {
 		err = fmt.Errorf("failed to write new FSM byte: %w", err)
 		return
 	}
-	err = t.fsm.Sync()
-	if err != nil {
-		return
-	}
 	idx = offset
 	return
 }
 
+// update the remaining free space for a page in the fsm file
 func (t *Table) updateFsm(idx int64, freeSpace uint32) (err error) {
 	capacity := fsmFreeSpaceToCapacity(freeSpace)
 	_, err = t.fsm.WriteAt([]byte{capacity}, idx)
-	if err != nil {
-		return
-	}
-	err = t.fsm.Sync()
 	if err != nil {
 		return
 	}

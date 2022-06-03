@@ -20,6 +20,7 @@ func TestPageWriteAndRead(t *testing.T) {
 	defer file.Close()
 
 	page1 := NewPage(file, 0)
+	defer page1.Close()
 	for _, item := range inputTuples {
 		_, err := page1.Add(item)
 		assert.NoError(t, err)
@@ -29,6 +30,7 @@ func TestPageWriteAndRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	page2 := NewPage(file, 0)
+	defer page2.Close()
 	outputTuples, err := page2.ReadAll()
 	assert.NoError(t, err)
 

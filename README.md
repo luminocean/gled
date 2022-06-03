@@ -8,7 +8,7 @@ Lightweight Embedded Database in Golang, inspired by SQLite and PostgreSQL.
 
 ```go
 type Book struct {
-	Name string
+    Name string
 }
 ```
 

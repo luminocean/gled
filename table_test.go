@@ -25,6 +25,7 @@ func TestTableWriteAndRead(t *testing.T) {
 	defer fsm.Close()
 
 	table := NewTable(data, fsm)
+	defer table.Close()
 	for _, item := range inputTuples {
 		err := table.Add(item)
 		assert.NoError(t, err)
@@ -63,6 +64,7 @@ func TestTableWriteAndReadBulk(t *testing.T) {
 	defer fsm.Close()
 
 	table := NewTable(data, fsm)
+	defer table.Close()
 	for _, item := range inputTuples {
 		err := table.Add(item)
 		assert.NoError(t, err)
