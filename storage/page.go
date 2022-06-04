@@ -1,4 +1,4 @@
-package gled
+package storage
 
 import (
 	"bufio"
@@ -19,7 +19,7 @@ const (
 )
 
 var (
-	// endian for all data bytes in a page
+	// endian for all Data bytes in a page
 	endian = binary.BigEndian
 	// size of a page header
 	pageHeaderSize = uint32(unsafe.Sizeof(PageHeader{}))
@@ -115,14 +115,14 @@ func (p *TuplePointer) toBytes() (data []byte) {
 	return
 }
 
-// Tuple is a data tuple
+// Tuple is a Data tuple
 type Tuple []byte
 
 func (t *Tuple) Size() uint32 {
 	return uint32(len(*t))
 }
 
-// Page is a fixed-length area on a data to store tuples and related data structures
+// Page is a fixed-length area on a Data to store tuples and related Data structures
 type Page struct {
 	header      PageHeader
 	data        *os.File
@@ -131,7 +131,7 @@ type Page struct {
 }
 
 // NewPage creates and initializes a new page
-// from a specific offset of a data
+// from a specific offset of a Data
 func NewPage(data *os.File, offset uint64) *Page {
 	return &Page{
 		header:      PageHeader{},
@@ -199,6 +199,40 @@ func (p *Page) Add(tuple Tuple) (free uint32, err error) {
 	return
 }
 
+// Remove removes a tuple by providing the pointer index (starting from 0) pointing to the tuple
+// Note that FSM is not updated until we do vacuuming
+func (p *Page) Remove(tpIdx uint32) (err error) {
+	pointerCount, err := p.countTuplePointers()
+	if err != nil {
+		err = fmt.Errorf("failed to count tuple pointers: %w", err)
+		return
+	}
+	if tpIdx >= pointerCount {
+		err = fmt.Errorf("tuple pointer index too large")
+		return
+	}
+	// read the pointer from the Data
+	tpStart := pageHeaderSize + tuplePointerSize*tpIdx
+	buffer := make([]byte, tuplePointerSize)
+	err = p.readAt(buffer, tpStart)
+	if err != nil {
+		return
+	}
+	pointer, err := NewTuplePointerFromBytes(buffer)
+	if err != nil {
+		return
+	}
+	// reset the pointer so that the pointed tuple will be considered "deleted"
+	pointer.attrs.used = false
+	// write back
+	err = p.writeAt(pointer.toBytes(), tpStart)
+	if err != nil {
+		err = fmt.Errorf("failed to write tuple pointer back to the Data: %w", err)
+		return
+	}
+	return
+}
+
 func (p *Page) Flush() (err error) {
 	err = p.data.Sync()
 	if err != nil {
@@ -218,39 +252,6 @@ func (p *Page) Close() (err error) {
 	}
 	// if there's an error during Flush, the page is not considered as closed
 	p.initialized = false
-	return
-}
-
-// Remove removes a tuple by providing the pointer index (starting from 0) pointing to the tuple
-func (p *Page) Remove(tpIdx uint32) (err error) {
-	pointerCount, err := p.countTuplePointers()
-	if err != nil {
-		err = fmt.Errorf("failed to count tuple pointers: %w", err)
-		return
-	}
-	if tpIdx >= pointerCount {
-		err = fmt.Errorf("tuple pointer index too large")
-		return
-	}
-	// read the pointer from the data
-	tpStart := pageHeaderSize + tuplePointerSize*tpIdx
-	buffer := make([]byte, tuplePointerSize)
-	err = p.readAt(buffer, tpStart)
-	if err != nil {
-		return
-	}
-	pointer, err := NewTuplePointerFromBytes(buffer)
-	if err != nil {
-		return
-	}
-	// reset the pointer so that the pointed tuple will be considered "deleted"
-	pointer.attrs.used = false
-	// write back
-	err = p.writeAt(pointer.toBytes(), tpStart)
-	if err != nil {
-		err = fmt.Errorf("failed to write tuple pointer back to the data: %w", err)
-		return
-	}
 	return
 }
 
@@ -299,7 +300,7 @@ func (p *Page) ReadAll() (tuples []Tuple, err error) {
 		var tupleSize uint32
 		// decide the tuple size
 		if idx == 0 {
-			// the first tuple (at the end of the data)
+			// the first tuple (at the end of the Data)
 			tupleSize = uint32(pageSize - pointers[idx].dataPtr)
 		} else {
 			tupleSize = uint32(pointers[idx-1].dataPtr - pointers[idx].dataPtr)
@@ -307,7 +308,7 @@ func (p *Page) ReadAll() (tuples []Tuple, err error) {
 		buffer = make([]byte, tupleSize)
 		err = p.readAt(buffer, uint32(pointer.dataPtr))
 		if err != nil {
-			err = fmt.Errorf("failed tp read tuple data: %w", err)
+			err = fmt.Errorf("failed tp read tuple Data: %w", err)
 			return
 		}
 		tuples = append(tuples, buffer)
@@ -350,7 +351,7 @@ func (p *Page) writeAt(data []byte, position uint32) (err error) {
 	if err != nil {
 		return
 	} else if written != len(data) {
-		err = errors.New("wrong number of bytes written into the page data")
+		err = errors.New("wrong number of bytes written into the page Data")
 		return
 	}
 	return
@@ -360,7 +361,7 @@ func (p *Page) readAt(data []byte, position uint32) (err error) {
 	// read the content
 	_, err = p.data.Seek(int64(p.offset+uint64(position)), io.SeekStart)
 	if err != nil {
-		err = fmt.Errorf("failed to seek the page data: %w", err)
+		err = fmt.Errorf("failed to seek the page Data: %w", err)
 		return
 	}
 	read, err := p.data.Read(data)
@@ -369,7 +370,7 @@ func (p *Page) readAt(data []byte, position uint32) (err error) {
 		if err == io.EOF {
 			return err
 		}
-		err = fmt.Errorf("failed to read data from data: %w", err)
+		err = fmt.Errorf("failed to read Data from Data: %w", err)
 		return
 	} else if read != len(data) {
 		err = fmt.Errorf("mismatched number of bytes read")

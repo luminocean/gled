@@ -1,4 +1,4 @@
-package gled
+package storage
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -9,7 +9,7 @@ import (
 
 func TestPageWriteAndRead(t *testing.T) {
 	inputTuples := []Tuple{
-		Tuple("here's some data"),
+		Tuple("here's some Data"),
 		Tuple("have a nice day"),
 		Tuple("good bye"),
 	}

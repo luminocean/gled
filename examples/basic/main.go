@@ -1,10 +1,3 @@
-# GLED
-
-Lightweight Embedded Database in Golang, inspired by SQLite and PostgreSQL.
-
-## Usage
-
-```go
 package main
 
 import (
@@ -43,13 +36,3 @@ func main() {
 	// gives "[{mybook 10}]"
 	fmt.Println(books)
 }
-```
-
-## Roadmap
-
-- [x] Multi-page support for Gled tables (currently only one page per table)
-- [x] Multi-table/multi-database support
-- [ ] Indexing
-- [ ] SQL interface
-- [ ] DB Vacuum
-
