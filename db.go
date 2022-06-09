@@ -2,7 +2,7 @@ package gled
 
 import (
 	"fmt"
-	"github.com/luminocean/gled/storage"
+	"github.com/luminocean/gled/table"
 	"os"
 	"path"
 )
@@ -15,7 +15,7 @@ func NewGleDB(directory string) *GledDB {
 	return &GledDB{dir: directory}
 }
 
-func Table[T any](db *GledDB, name string) (table *GledTable[T], err error) {
+func Table[T any](db *GledDB, name string) (gt *GledTable[T], err error) {
 	dirInfo, err := os.Stat(db.dir)
 	if err != nil {
 		err = fmt.Errorf("failed to check db directory: %w", err)
@@ -42,8 +42,8 @@ func Table[T any](db *GledDB, name string) (table *GledTable[T], err error) {
 		err = fmt.Errorf("failed to open fsm file %s: %w", fsmPath, err)
 		return
 	}
-	table = &GledTable[T]{
-		table: storage.NewTable(dataFile, fsmFile),
+	gt = &GledTable[T]{
+		table: table.NewTable(dataFile, fsmFile),
 	}
 	return
 }

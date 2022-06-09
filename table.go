@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/luminocean/gled/exp"
-	"github.com/luminocean/gled/storage"
+	"github.com/luminocean/gled/page"
+	"github.com/luminocean/gled/table"
 	"github.com/vmihailenco/msgpack/v5"
 	"regexp"
 )
@@ -19,7 +20,7 @@ var (
 )
 
 type GledTable[T any] struct {
-	table *storage.Table
+	table *table.Table
 }
 
 func (t *GledTable[T]) Insert(item T) (err error) {
@@ -36,8 +37,8 @@ func (t *GledTable[T]) Insert(item T) (err error) {
 	return
 }
 
-func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []storage.TupleLocation, err error) {
-	err = t.table.Scan(func(tuple storage.Tuple, loc storage.TupleLocation) (cont bool, err error) {
+func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []page.TupleLocation, err error) {
+	err = t.table.Scan(func(tuple page.Tuple, loc page.TupleLocation) (cont bool, err error) {
 		var unmarshalled map[string]any
 		err = msgpack.Unmarshal(tuple, &unmarshalled)
 		if err != nil {
@@ -59,7 +60,7 @@ func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []storage.TupleLo
 	return
 }
 
-func (t *GledTable[T]) Delete(loc storage.TupleLocation) (err error) {
+func (t *GledTable[T]) Delete(loc page.TupleLocation) (err error) {
 	err = t.table.Delete(loc)
 	if err != nil {
 		return
