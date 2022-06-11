@@ -1,4 +1,4 @@
-package page
+package table
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -9,7 +9,7 @@ import (
 
 func TestPageBasic(t *testing.T) {
 	inputTuples := []Tuple{
-		Tuple("here's some data"),
+		Tuple("here's some file"),
 		Tuple("have a nice day"),
 		Tuple("good bye"),
 	}

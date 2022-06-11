@@ -1,10 +1,8 @@
 package gled
 
 import (
-	"errors"
 	"fmt"
 	"github.com/luminocean/gled/exp"
-	"github.com/luminocean/gled/page"
 	"github.com/luminocean/gled/table"
 	"github.com/vmihailenco/msgpack/v5"
 	"regexp"
@@ -37,8 +35,8 @@ func (t *GledTable[T]) Insert(item T) (err error) {
 	return
 }
 
-func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []page.TupleLocation, err error) {
-	err = t.table.Scan(func(tuple page.Tuple, loc page.TupleLocation) (cont bool, err error) {
+func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []table.TupleLocation, err error) {
+	err = t.table.Scan(func(tuple table.Tuple, loc table.TupleLocation) (cont bool, err error) {
 		var unmarshalled map[string]any
 		err = msgpack.Unmarshal(tuple, &unmarshalled)
 		if err != nil {
@@ -60,7 +58,7 @@ func (t *GledTable[T]) Select(ex exp.Ex) (items []T, locations []page.TupleLocat
 	return
 }
 
-func (t *GledTable[T]) Delete(loc page.TupleLocation) (err error) {
+func (t *GledTable[T]) Delete(loc table.TupleLocation) (err error) {
 	err = t.table.Delete(loc)
 	if err != nil {
 		return
@@ -69,20 +67,8 @@ func (t *GledTable[T]) Delete(loc page.TupleLocation) (err error) {
 }
 
 func (t *GledTable[T]) Close() (err error) {
-	errMsg := ""
-	dataCloseErr := t.table.Data.Close()
-	if dataCloseErr != nil {
-		errMsg += fmt.Sprintf("failed to close data file %s", t.table.Fsm.Name())
-	}
-	fsmCloseErr := t.table.Fsm.Close()
-	if fsmCloseErr != nil {
-		if errMsg != "" {
-			errMsg += "; "
-		}
-		errMsg += fmt.Sprintf("failed to close fsm file %s", t.table.Fsm.Name())
-	}
-	if errMsg != "" {
-		err = errors.New(errMsg)
+	err = t.table.Close()
+	if err != nil {
 		return
 	}
 	return

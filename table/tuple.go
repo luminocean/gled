@@ -1,9 +1,15 @@
-package page
+package table
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"unsafe"
+)
+
+var (
+	// size of a tuple pointer
+	tuplePointerSize = uint32(unsafe.Sizeof(TuplePointer{}))
 )
 
 // TuplePointer points to a tuple within a page
@@ -60,7 +66,7 @@ func (p *TuplePointer) toBytes() (data []byte) {
 	return
 }
 
-// Tuple is a Data tuple
+// Tuple is a data tuple
 type Tuple []byte
 
 func (t *Tuple) Size() uint32 {

@@ -1,7 +1,6 @@
 package table
 
 import (
-	"github.com/luminocean/gled/page"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"os"
@@ -9,10 +8,10 @@ import (
 )
 
 func TestTableCRD(t *testing.T) {
-	inputTuples := []page.Tuple{
-		page.Tuple("here's some Data"),
-		page.Tuple("have a nice day"),
-		page.Tuple("good bye"),
+	inputTuples := []Tuple{
+		Tuple("here's some file"),
+		Tuple("have a nice day"),
+		Tuple("good bye"),
 	}
 
 	data, err := ioutil.TempFile("", "gled_ut_tbl_data_*")
@@ -34,9 +33,9 @@ func TestTableCRD(t *testing.T) {
 	}
 
 	// retrieve
-	outputTuples := []page.Tuple{}
-	locations := []page.TupleLocation{}
-	err = table.Scan(func(t page.Tuple, loc page.TupleLocation) (bool, error) {
+	outputTuples := []Tuple{}
+	locations := []TupleLocation{}
+	err = table.Scan(func(t Tuple, loc TupleLocation) (bool, error) {
 		outputTuples = append(outputTuples, t)
 		locations = append(locations, loc)
 		return true, nil
@@ -49,8 +48,8 @@ func TestTableCRD(t *testing.T) {
 	assert.NoError(t, err)
 
 	// retrieve again
-	outputTuples = []page.Tuple{}
-	err = table.Scan(func(t page.Tuple, loc page.TupleLocation) (bool, error) {
+	outputTuples = []Tuple{}
+	err = table.Scan(func(t Tuple, loc TupleLocation) (bool, error) {
 		outputTuples = append(outputTuples, t)
 		locations = append(locations, loc)
 		return true, nil
@@ -61,12 +60,12 @@ func TestTableCRD(t *testing.T) {
 }
 
 func TestTableWriteAndReadBulk(t *testing.T) {
-	inputTuples := []page.Tuple{}
+	inputTuples := []Tuple{}
 	// 40 bytes per batch
-	batch := []page.Tuple{
-		page.Tuple("here's some Data"),
-		page.Tuple("have a nice day"),
-		page.Tuple("good bye!"),
+	batch := []Tuple{
+		Tuple("here's some file"),
+		Tuple("have a nice day"),
+		Tuple("good bye!"),
 	}
 	// making inputTuples with size 40 * 205 == 8200 bytes, which exceeds a page
 	for i := 0; i < 250; i++ {
@@ -90,8 +89,8 @@ func TestTableWriteAndReadBulk(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	outputTuples := []page.Tuple{}
-	err = table.Scan(func(t page.Tuple, loc page.TupleLocation) (bool, error) {
+	outputTuples := []Tuple{}
+	err = table.Scan(func(t Tuple, loc TupleLocation) (bool, error) {
 		outputTuples = append(outputTuples, t)
 		return true, nil
 	})
@@ -100,7 +99,7 @@ func TestTableWriteAndReadBulk(t *testing.T) {
 }
 
 func TestFsmFreeSpaceToCapacity(t *testing.T) {
-	assert.Equal(t, uint8(0), fsmFreeSpaceToCapacity(page.PageSize))
+	assert.Equal(t, uint8(0), fsmFreeSpaceToCapacity(PageSize))
 	assert.Equal(t, uint8(255), fsmFreeSpaceToCapacity(0))
 	// remaining space is less than fsmDensity
 	// consider a full
@@ -108,5 +107,5 @@ func TestFsmFreeSpaceToCapacity(t *testing.T) {
 }
 
 func TestFsmCapacityToFreeSpace(t *testing.T) {
-	assert.Equal(t, uint32(page.PageSize-fsmDensity), fsmCapacityToFreeSpace(0))
+	assert.Equal(t, uint32(PageSize-fsmDensity), fsmCapacityToFreeSpace(0))
 }

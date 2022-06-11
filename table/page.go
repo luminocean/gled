@@ -1,14 +1,11 @@
-package page
+package table
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/luminocean/gled/util"
 	"io"
 	"os"
-	"unsafe"
 )
 
 // The page layout is borrowed from https://www.interdb.jp/pg/pgsql01.html
@@ -18,33 +15,24 @@ const (
 	PageSize = 1024 * 8
 )
 
-var (
-	// Endian for all Data bytes in a page
-	Endian = binary.BigEndian
+// PagePointer is a pointer pointing to a location within a page
+type PagePointer uint32
 
-	// size of a page header
-	pageHeaderSize = uint32(unsafe.Sizeof(PageHeader{}))
-	// size of a page pointer
-	pagePointerSize = uint32(unsafe.Sizeof(PagePointer(0)))
-	// size of a tuple pointer
-	tuplePointerSize = uint32(unsafe.Sizeof(TuplePointer{}))
-)
-
-// Page is a fixed-length area on a Data to store tuples and related Data structures
+// Page is a fixed-length area in a file to store tuples and related data structures
 type Page struct {
-	header PageHeader
-	data   *os.File
+	file *os.File
 	// where the page starts at the data file
 	offset      uint64
+	header      PageHeader
 	initialized bool
 }
 
 // NewPage creates and initializes a new page
-// from a specific offset of a Data
+// from a specific offset of a file
 func NewPage(data *os.File, offset uint64) *Page {
 	return &Page{
 		header:      PageHeader{},
-		data:        data,
+		file:        data,
 		offset:      offset,
 		initialized: false,
 	}
@@ -151,8 +139,11 @@ func (p *Page) Add(tuple Tuple) (idx uint32, free uint32, err error) {
 		return
 	}
 
-	// the remaining hole size - one pointer
-	free = uint32(p.header.upper) - uint32(p.header.lower) - tuplePointerSize
+	fs := p.freeSize()
+	if fs < 0 {
+		panic("negative free size after adding a new tuple")
+	}
+	free = uint32(fs)
 	return
 }
 
@@ -191,14 +182,14 @@ func (p *Page) Remove(idx uint32) (err error) {
 	// write back
 	err = p.writeAt(pointer.toBytes(), tpStart)
 	if err != nil {
-		err = fmt.Errorf("failed to write tuple pointer back to the Data: %w", err)
+		err = fmt.Errorf("failed to write tuple pointer back to the file: %w", err)
 		return
 	}
 	return
 }
 
 func (p *Page) Flush() (err error) {
-	err = p.data.Sync()
+	err = p.file.Sync()
 	if err != nil {
 		return
 	}
@@ -250,7 +241,7 @@ func (p *Page) ReadAll() (tuples []Tuple, err error) {
 		buffer = make([]byte, pointer.dataSize)
 		err = p.readAt(buffer, uint32(pointer.dataPtr))
 		if err != nil {
-			err = fmt.Errorf("failed tp read tuple data: %w", err)
+			err = fmt.Errorf("failed tp read tuple file: %w", err)
 			return
 		}
 		tuples = append(tuples, buffer)
@@ -270,6 +261,11 @@ func (p *Page) Close() (err error) {
 	// if there's an error during Flush, the page is not considered as closed
 	p.initialized = false
 	return
+}
+
+// returns (the remaining hole size - one tuple pointer)
+func (p *Page) freeSize() int32 {
+	return int32(p.header.upper) - int32(p.header.lower) - int32(tuplePointerSize)
 }
 
 func (p *Page) countTuplePointers() (count uint32, err error) {
@@ -297,80 +293,25 @@ func (p *Page) readHeader() (err error) {
 		}
 		return fmt.Errorf("failed to read page header: %w", err)
 	}
-	p.header.lower = PagePointer(Endian.Uint32(buffer[pagePointerSize*0 : pagePointerSize*1]))
-	p.header.upper = PagePointer(Endian.Uint32(buffer[pagePointerSize*1 : pagePointerSize*2]))
-	return
-}
-
-func (p *Page) writeAt(data []byte, position uint32) (err error) {
-	written, err := p.data.WriteAt(data, int64(p.offset+uint64(position)))
+	err = p.header.fromBytes(buffer)
 	if err != nil {
-		return
-	} else if written != len(data) {
-		err = errors.New("wrong number of bytes written into the page Data")
 		return
 	}
 	return
 }
 
-func (p *Page) readAt(data []byte, position uint32) (err error) {
-	_, err = p.data.Seek(int64(p.offset+uint64(position)), io.SeekStart)
+func (p *Page) writeAt(data []byte, position uint32) (err error) {
+	err = util.WriteAt(p.file, data, int64(p.offset+uint64(position)))
 	if err != nil {
-		err = fmt.Errorf("failed to seek the page Data: %w", err)
-		return
-	}
-	read, err := p.data.Read(data)
-	if err != nil {
-		// for EOF, return as is since it might be normal sometimes
-		if err == io.EOF {
-			return err
-		}
-		err = fmt.Errorf("failed to read Data from Data: %w", err)
-		return
-	} else if read != len(data) {
-		err = fmt.Errorf("mismatched number of bytes read")
 		return
 	}
 	return
 }
 
-// PagePointer is a pointer pointing to a location within a page
-type PagePointer uint32
-
-// PageHeader is the head of a page
-type PageHeader struct {
-	// Lower is the starting position of the free space (inclusive)
-	// relative to the containing page offset
-	lower PagePointer
-	// Lower is the ending position of the free space (exclusive)
-	// relative to the containing page offset
-	upper PagePointer
-}
-
-func (p *PageHeader) toBytes() (data []byte) {
-	buffer := bytes.Buffer{}
-	w := bufio.NewWriter(&buffer)
-	_, err := w.Write(uint32ToBytes(uint32(p.lower)))
+func (p *Page) readAt(buffer []byte, position uint32) (err error) {
+	err = util.ReadAt(p.file, buffer, int64(p.offset+uint64(position)))
 	if err != nil {
-		panic(err) // in-memory write, should not fail
+		return
 	}
-	_, err = w.Write(uint32ToBytes(uint32(p.upper)))
-	if err != nil {
-		panic(err)
-	}
-	err = w.Flush()
-	if err != nil {
-		panic(err)
-	}
-	return buffer.Bytes()
-}
-
-func uint32ToBytes(value uint32) []byte {
-	buffer := make([]byte, unsafe.Sizeof(value))
-	Endian.PutUint32(buffer, value)
-	return buffer
-}
-
-func bytesToUint32(data []byte) uint32 {
-	return Endian.Uint32(data)
+	return
 }
